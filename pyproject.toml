@@ -1,0 +1,14 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dagflow"
+version = "0.1.0"
+description = "Incremental computation engine"
+requires-python = ">=3.10"
+authors = [{name = "AfterQuery", email = "dev@afterquery.com"}]
+dependencies = []
+
+[tool.setuptools.packages.find]
+where = ["src"]
