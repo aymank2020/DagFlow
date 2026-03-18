@@ -70,3 +70,28 @@ class ComputeGraph:
             visited.add(current)
             queue.extend(self._adjacency.get(current, set()))
         return False
+
+    def get_dependencies(self, node_id: str) -> List[str]:
+        """Return immediate upstream dependencies."""
+        node = self.get_node(node_id)
+        if isinstance(node, ComputeNode):
+            return list(node.dependencies)
+        return []
+
+    def get_all_downstream(self, node_id: str) -> List[str]:
+        """BFS to collect all transitive dependents."""
+        visited: Set[str] = set()
+        queue = deque(self.get_dependents(node_id))
+        while queue:
+            current = queue.popleft()
+            if current in visited:
+                continue
+            visited.add(current)
+            queue.extend(d for d in self.get_dependents(current) if d not in visited)
+        return list(visited)
+
+    def get_input_nodes(self) -> List[str]:
+        return [nid for nid, n in self._nodes.items() if n.is_input]
+
+    def get_compute_nodes(self) -> List[str]:
+        return [nid for nid, n in self._nodes.items() if not n.is_input]
