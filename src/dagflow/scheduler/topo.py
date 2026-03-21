@@ -1,4 +1,4 @@
-"""Topological scheduler — determines execution order for dirty nodes."""
+"""Topological scheduler with priority-aware tie-breaking."""
 from __future__ import annotations
 from collections import defaultdict
 from typing import Dict, List, Set, Tuple
@@ -6,7 +6,7 @@ from dagflow.core.graph import ComputeGraph
 from dagflow.core.node import ComputeNode
 
 class TopologicalScheduler:
-    """Produces execution plan for dirty nodes in topological order."""
+    """Produces execution plan in topological order with priority."""
     def __init__(self, graph: ComputeGraph) -> None:
         self._graph = graph
 
@@ -28,16 +28,26 @@ class TopologicalScheduler:
                     sub_adj[dep_id].append(nid)
                     count += 1
             in_degree[nid] = count
-        # Kahn's algorithm
-        ready = [nid for nid, deg in in_degree.items() if deg == 0]
+        ready: List[Tuple[int, str]] = []
+        for nid, deg in in_degree.items():
+            if deg == 0:
+                node = self._graph.get_node(nid)
+                pri = node.priority if isinstance(node, ComputeNode) else 0
+                ready.append((pri, nid))
         ready.sort()
         result: List[str] = []
         while ready:
-            current = ready.pop(0)
+            _, current = ready.pop(0)
             result.append(current)
-            for dep in sub_adj[current]:
-                in_degree[dep] -= 1
-                if in_degree[dep] == 0:
-                    ready.append(dep)
+            for dependent in sub_adj[current]:
+                in_degree[dependent] -= 1
+                if in_degree[dependent] == 0:
+                    dep_node = self._graph.get_node(dependent)
+                    pri = dep_node.priority if isinstance(dep_node, ComputeNode) else 0
+                    ready.append((pri, dependent))
                     ready.sort()
         return result
+
+    def full_schedule(self) -> List[str]:
+        all_compute = set(self._graph.get_compute_nodes())
+        return self.schedule(all_compute)
