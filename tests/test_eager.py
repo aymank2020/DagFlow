@@ -32,3 +32,27 @@ def test_input_change():
     inp.set(7)
     result = prop.propagate(["x"])
     assert result["sq"] == 49
+
+def test_diamond_no_stale():
+    """Diamond: a -> b, a -> c, b+c -> d."""
+    g = ComputeGraph()
+    g.add_input("a", value=1)
+    g.add_compute("b", func=lambda d: d["a"] + 10, dependencies=["a"])
+    g.add_compute("c", func=lambda d: d["a"] * 100, dependencies=["a"])
+    g.add_compute("d", func=lambda d: d["b"] + d["c"], dependencies=["b", "c"])
+    cache = MemoCache()
+    prop = EagerPropagator(g, cache)
+    result = prop.propagate(["a"])
+    assert result["d"] == 111
+
+def test_unrelated_not_recomputed():
+    g = ComputeGraph()
+    g.add_input("x", value=1)
+    g.add_input("y", value=2)
+    g.add_compute("cx", func=lambda d: d["x"] * 2, dependencies=["x"])
+    g.add_compute("cy", func=lambda d: d["y"] * 3, dependencies=["y"])
+    cache = MemoCache()
+    prop = EagerPropagator(g, cache)
+    result = prop.propagate(["x"])
+    assert "cx" in result
+    assert "cy" not in result
