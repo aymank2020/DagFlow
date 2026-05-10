@@ -123,3 +123,27 @@ class TestEagerPropagation:
         result = prop.propagate(["x"])
         assert "cx" in result
         assert "cy" not in result
+
+
+class TestEdgeCases:
+    """Edge case tests added during review."""
+
+    def test_invalidate_empty_list(self):
+        g = ComputeGraph()
+        g.add_input("x")
+        g.add_compute("y", func=lambda d: None, dependencies=["x"])
+        inv = Invalidator(g)
+        dirty = inv.invalidate_from([])
+        assert len(dirty) == 0
+
+    def test_propagate_no_changes(self):
+        g = ComputeGraph()
+        g.add_input("x", value=1)
+        g.add_compute("y", func=lambda d: d["x"], dependencies=["x"])
+        cache = MemoCache()
+        prop = EagerPropagator(g, cache)
+        prop.propagate(["x"])
+        # Propagate again without changing input
+        result = prop.propagate(["x"])
+        # y should still be recomputed (invalidator marks it dirty)
+        assert "y" in result
