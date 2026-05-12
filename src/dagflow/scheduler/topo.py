@@ -6,7 +6,7 @@ from dagflow.core.graph import ComputeGraph
 from dagflow.core.node import ComputeNode
 
 class TopologicalScheduler:
-    """Produces execution plan in topological order with priority."""
+    """Produce an execution plan in topological order with priority."""
     def __init__(self, graph: ComputeGraph) -> None:
         self._graph = graph
 
