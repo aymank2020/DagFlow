@@ -1,6 +1,6 @@
 """DagFlow — Incremental computation engine with DAG-based memoization."""
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 from dagflow.core.graph import ComputeGraph
 from dagflow.core.node import InputNode, ComputeNode
