@@ -36,3 +36,16 @@ pytest
 ## License
 
 MIT
+
+## Architecture
+
+    dagflow/
+      core/         - Graph structure, node types, dependency tracking
+      scheduler/    - Topological ordering, execution planning
+      propagation/  - Change propagation strategies (eager/lazy)
+      memo/         - Memoization, cache management, staleness detection
+      query/        - Demand-driven recomputation interface
+
+## License
+
+MIT
