@@ -267,6 +267,12 @@ class WriteAheadJournal:
     ) -> RecoveryResult:
         """Perform crash recovery by replaying pending entries.
 
+        Entries that were logged under a ``transaction_id`` recover as a unit:
+        if any member fails verification or cannot be applied, every member of
+        that transaction is rolled back, undoing any sibling that was already
+        applied so storage never observes a half-finished transaction.
+        Standalone entries (no transaction) continue to recover one by one.
+
         Args:
             apply_fn: Function that applies a journal entry to storage.
                       Returns True if successful.
@@ -277,28 +283,125 @@ class WriteAheadJournal:
         result = RecoveryResult()
         pending = self.get_pending_entries()
 
-        for entry in pending:
-            # Verify integrity
-            if self._enable_checksums and not entry.verify():
-                result.entries_discarded += 1
-                entry.state = JournalState.ROLLED_BACK
-                continue
-
-            # Apply the entry
-            if apply_fn(entry):
-                entry.state = JournalState.RECOVERED
-                result.entries_recovered += 1
-                result.last_sequence = max(result.last_sequence, entry.sequence)
-
-                op = entry.operation
-                result.operations_applied[op] = (
-                    result.operations_applied.get(op, 0) + 1
-                )
+        for group in self._group_for_recovery(pending):
+            if group[0].transaction_id is None:
+                self._recover_standalone(group[0], apply_fn, result)
             else:
-                result.entries_discarded += 1
-                entry.state = JournalState.ROLLED_BACK
+                self._recover_transaction(group, apply_fn, result)
 
         return result
+
+    def _group_for_recovery(
+        self,
+        pending: List[JournalEntry],
+    ) -> List[List[JournalEntry]]:
+        """Partition pending entries into recovery units.
+
+        Standalone entries become singleton groups; transactional entries are
+        grouped by ``transaction_id`` while preserving sequence order.
+        """
+        groups: List[List[JournalEntry]] = []
+        tx_index: Dict[str, int] = {}
+        for entry in pending:
+            if entry.transaction_id is None:
+                groups.append([entry])
+                continue
+            idx = tx_index.get(entry.transaction_id)
+            if idx is None:
+                tx_index[entry.transaction_id] = len(groups)
+                groups.append([entry])
+            else:
+                groups[idx].append(entry)
+        return groups
+
+    def _recover_standalone(
+        self,
+        entry: JournalEntry,
+        apply_fn: Callable[[JournalEntry], bool],
+        result: RecoveryResult,
+    ) -> None:
+        """Recover a single non-transactional entry."""
+        if self._enable_checksums and not entry.verify():
+            result.entries_discarded += 1
+            entry.state = JournalState.ROLLED_BACK
+            return
+
+        if apply_fn(entry):
+            self._mark_applied(entry, result)
+        else:
+            result.entries_discarded += 1
+            entry.state = JournalState.ROLLED_BACK
+
+    def _recover_transaction(
+        self,
+        entries: List[JournalEntry],
+        apply_fn: Callable[[JournalEntry], bool],
+        result: RecoveryResult,
+    ) -> None:
+        """Recover a transaction atomically (all entries or none)."""
+        # Pre-check integrity for the whole group before touching storage.
+        if self._enable_checksums and not all(e.verify() for e in entries):
+            for entry in entries:
+                result.entries_discarded += 1
+                entry.state = JournalState.ROLLED_BACK
+            return
+
+        applied: List[JournalEntry] = []
+        for entry in entries:
+            if apply_fn(entry):
+                applied.append(entry)
+            else:
+                self._undo_applied(applied, apply_fn)
+                for member in entries:
+                    result.entries_discarded += 1
+                    member.state = JournalState.ROLLED_BACK
+                return
+
+        for entry in applied:
+            self._mark_applied(entry, result)
+
+    def _undo_applied(
+        self,
+        applied: List[JournalEntry],
+        apply_fn: Callable[[JournalEntry], bool],
+    ) -> None:
+        """Revert already-applied entries using their recorded old values."""
+        for entry in reversed(applied):
+            apply_fn(self._compensating_entry(entry))
+
+    def _compensating_entry(self, entry: JournalEntry) -> JournalEntry:
+        """Build the inverse operation that undoes ``entry``."""
+        if entry.operation == "put":
+            if entry.old_value is None:
+                operation, value = "delete", None
+            else:
+                operation, value = "put", entry.old_value
+        elif entry.operation == "delete":
+            operation, value = "put", entry.old_value
+        else:
+            operation, value = entry.operation, entry.value
+        return JournalEntry(
+            sequence=entry.sequence,
+            operation=operation,
+            key=entry.key,
+            value=value,
+            old_value=entry.value,
+            transaction_id=entry.transaction_id,
+        )
+
+    def _mark_applied(
+        self,
+        entry: JournalEntry,
+        result: RecoveryResult,
+    ) -> None:
+        """Record a successfully recovered entry in the result."""
+        entry.state = JournalState.RECOVERED
+        result.entries_recovered += 1
+        result.last_sequence = max(result.last_sequence, entry.sequence)
+        op = entry.operation
+        result.operations_applied[op] = (
+            result.operations_applied.get(op, 0) + 1
+        )
 
     def compact(self) -> int:
         """Remove committed and rolled-back entries to free memory.
