@@ -217,7 +217,7 @@ class NodeFuser:
     def _extend_chain_forward(
         self, start_id: str, visited: Set[str]
     ) -> List[str]:
-        """Extend a chain forward from start_id following one compute successor."""
+        """Extend a chain without crossing externally observed intermediates."""
         chain = [start_id]
         current = start_id
 
@@ -229,19 +229,22 @@ class NodeFuser:
             dependents = [
                 d for d in node.dependents if d not in visited
             ]
-            compute_successors = []
-            for dep_id in dependents:
-                dep_node = self._graph.get_node(dep_id)
-                if (
-                    isinstance(dep_node, ComputeNode)
-                    and len(dep_node.dependencies) == 1
-                ):
-                    compute_successors.append(dep_id)
 
-            if not compute_successors:
+            # A fused node replaces the chain tail. We may only absorb the
+            # next node when the current node is observed by exactly one
+            # downstream node; otherwise another branch still reads this
+            # intermediate value and fusing through it would drop it.
+            if len(dependents) != 1:
                 break
 
-            next_id = compute_successors[0]
+            next_id = dependents[0]
+            next_node = self._graph.get_node(next_id)
+
+            if not isinstance(next_node, ComputeNode):
+                break
+            if len(next_node.dependencies) != 1:
+                break
+
             chain.append(next_id)
             current = next_id
 
@@ -251,46 +254,48 @@ class NodeFuser:
         return chain
 
     def _fuse_chain(self, candidate: FusionCandidate) -> Optional[str]:
-        """Fuse a chain into a single node. Returns new node ID or None."""
+        """Fuse a chain into its tail node, removing the interior nodes.
+
+        The fused node keeps the tail's identity so any external branch that
+        still observes the tail value keeps reading the same node. Chain
+        selection guarantees every interior node has exactly one in-chain
+        dependent, so removing the interior drops no externally observed
+        edge. Returns the fused node ID or None.
+        """
         chain = candidate.chain
-        fused_id = f"fused_{'_'.join(chain[:3])}"
-
-        composed_fn = self.compose_functions(chain)
-
-        try:
-            self._graph.add_compute(
-                node_id=fused_id,
-                func=composed_fn,
-                dependencies=candidate.head_deps,
-            )
-        except (ValueError, KeyError):
+        if len(chain) < 2:
             return None
 
         tail_id = chain[-1]
         tail_node = self._graph.get_node(tail_id)
-        if isinstance(tail_node, ComputeNode):
-            fused_node = self._graph.get_node(fused_id)
-            for dep_id in list(tail_node.dependents):
-                dep_node = self._graph.get_node(dep_id)
-                if isinstance(dep_node, ComputeNode):
-                    if tail_id in dep_node.dependencies:
-                        dep_node.dependencies = [
-                            fused_id if old == tail_id else old
-                            for old in dep_node.dependencies
-                        ]
-                    self._graph._reverse[dep_id].discard(tail_id)
-                    self._graph._reverse[dep_id].add(fused_id)
-                    self._graph._adjacency[fused_id].add(dep_id)
-                    if dep_id not in fused_node.dependents:
-                        fused_node.dependents.append(dep_id)
+        if not isinstance(tail_node, ComputeNode):
+            return None
 
-        for node_id in chain:
+        # Compose the chain functions before mutating any node so the
+        # closure captures the original tail function, not the new one.
+        composed_fn = self.compose_functions(chain)
+        head_deps = list(candidate.head_deps)
+
+        # Remove the interior nodes (everything except the tail).
+        for node_id in chain[:-1]:
             try:
                 self._graph.remove_node(node_id)
             except KeyError:
                 pass
 
-        return fused_id
+        # Re-point the tail at the head's dependencies and let it compute
+        # the whole composed chain in one step. The tail's own dependents
+        # are left untouched, so their stored references remain valid.
+        tail_node.func = composed_fn
+        tail_node.dependencies = list(head_deps)
+        self._graph._reverse[tail_id] = set(head_deps)
+        for dep_id in head_deps:
+            self._graph._adjacency[dep_id].add(tail_id)
+            dep_node = self._graph.get_node(dep_id)
+            if tail_id not in dep_node.dependents:
+                dep_node.dependents.append(tail_id)
+
+        return tail_id
 
     def _estimate_savings(self, chain: List[str]) -> float:
         """Estimate scheduling overhead saved by fusing a chain.
