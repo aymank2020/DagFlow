@@ -217,7 +217,7 @@ class NodeFuser:
     def _extend_chain_forward(
         self, start_id: str, visited: Set[str]
     ) -> List[str]:
-        """Extend a chain forward from start_id following linear paths."""
+        """Extend a chain forward from start_id following one compute successor."""
         chain = [start_id]
         current = start_id
 
@@ -229,20 +229,19 @@ class NodeFuser:
             dependents = [
                 d for d in node.dependents if d not in visited
             ]
+            compute_successors = []
+            for dep_id in dependents:
+                dep_node = self._graph.get_node(dep_id)
+                if (
+                    isinstance(dep_node, ComputeNode)
+                    and len(dep_node.dependencies) == 1
+                ):
+                    compute_successors.append(dep_id)
 
-            # Must have exactly one dependent for linear chain
-            if len(dependents) != 1:
+            if not compute_successors:
                 break
 
-            next_id = dependents[0]
-            next_node = self._graph.get_node(next_id)
-
-            # Next node must have exactly one dependency (current)
-            if not isinstance(next_node, ComputeNode):
-                break
-            if len(next_node.dependencies) != 1:
-                break
-
+            next_id = compute_successors[0]
             chain.append(next_id)
             current = next_id
 
@@ -256,19 +255,42 @@ class NodeFuser:
         chain = candidate.chain
         fused_id = f"fused_{'_'.join(chain[:3])}"
 
-        # Create composed function
         composed_fn = self.compose_functions(chain)
 
-        # The fused node takes the head's dependencies
         try:
-            fused_node = self._graph.add_compute(
+            self._graph.add_compute(
                 node_id=fused_id,
                 func=composed_fn,
                 dependencies=candidate.head_deps,
             )
-            return fused_id
         except (ValueError, KeyError):
             return None
+
+        tail_id = chain[-1]
+        tail_node = self._graph.get_node(tail_id)
+        if isinstance(tail_node, ComputeNode):
+            fused_node = self._graph.get_node(fused_id)
+            for dep_id in list(tail_node.dependents):
+                dep_node = self._graph.get_node(dep_id)
+                if isinstance(dep_node, ComputeNode):
+                    if tail_id in dep_node.dependencies:
+                        dep_node.dependencies = [
+                            fused_id if old == tail_id else old
+                            for old in dep_node.dependencies
+                        ]
+                    self._graph._reverse[dep_id].discard(tail_id)
+                    self._graph._reverse[dep_id].add(fused_id)
+                    self._graph._adjacency[fused_id].add(dep_id)
+                    if dep_id not in fused_node.dependents:
+                        fused_node.dependents.append(dep_id)
+
+        for node_id in chain:
+            try:
+                self._graph.remove_node(node_id)
+            except KeyError:
+                pass
+
+        return fused_id
 
     def _estimate_savings(self, chain: List[str]) -> float:
         """Estimate scheduling overhead saved by fusing a chain.

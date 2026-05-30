@@ -167,6 +167,27 @@ class ComputeGraph:
         """Return IDs of all compute nodes."""
         return [nid for nid, n in self._nodes.items() if not n.is_input]
 
+    def remove_node(self, node_id: str) -> None:
+        """Remove a node and all its edges from the graph."""
+        if node_id not in self._nodes:
+            raise KeyError(f"Node '{node_id}' not found")
+
+        for dep_id in list(self._reverse.get(node_id, set())):
+            self._adjacency[dep_id].discard(node_id)
+            dep_node = self._nodes[dep_id]
+            if node_id in dep_node.dependents:
+                dep_node.dependents.remove(node_id)
+
+        for ds_id in list(self._adjacency.get(node_id, set())):
+            self._reverse[ds_id].discard(node_id)
+            ds_node = self._nodes[ds_id]
+            if isinstance(ds_node, ComputeNode) and node_id in ds_node.dependencies:
+                ds_node.dependencies.remove(node_id)
+
+        del self._nodes[node_id]
+        del self._adjacency[node_id]
+        del self._reverse[node_id]
+
     # ─── Internal ──────────────────────────────────────────────────────
 
     def _can_reach(self, source: str, target: str) -> bool:
