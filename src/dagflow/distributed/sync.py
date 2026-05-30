@@ -248,12 +248,20 @@ class SyncProtocol:
         # Detect conflicts (concurrent modifications)
         conflicts: Set[str] = set()
         if source_clock.concurrent_with(target_clock):
+            pair_key = (source, target)
+            last_sync = self._last_sync.get(pair_key)
+            target_at_last_sync = last_sync.get(target) if last_sync else 0
+
             # Both have been modified since last sync — potential conflicts
             for node_id in node_values:
                 # Check if target also modified this node
                 target_mutations = [
                     entry for entry in self._mutation_log
-                    if entry[0] == target and entry[2] == node_id
+                    if (
+                        entry[0] == target
+                        and entry[2] == node_id
+                        and entry[1] > target_at_last_sync
+                    )
                 ]
                 if target_mutations:
                     conflicts.add(node_id)
@@ -268,7 +276,7 @@ class SyncProtocol:
         target_clock.merge(source_clock)
         pair_key = (source, target)
         self._last_sync[pair_key] = VectorClock(
-            clocks=dict(source_clock.clocks)
+            clocks=dict(target_clock.clocks)
         )
 
         state = SyncState.IN_SYNC if not conflicts else SyncState.DIVERGED
