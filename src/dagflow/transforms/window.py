@@ -109,6 +109,11 @@ class WindowNode:
         """Get the buffer associated with a window node."""
         return self._buffers.get(node_id)
 
+    def _attach_buffer(self, node: ComputeNode, buffer: WindowBuffer) -> ComputeNode:
+        """Expose a window buffer to graph-level checkpointing."""
+        setattr(node, "_dagflow_window_buffer", buffer)
+        return node
+
     def create_moving_average(
         self,
         node_id: str,
@@ -139,8 +144,11 @@ class WindowNode:
                 return 0.0
             return sum(values) / len(values)
 
-        return self._graph.add_compute(
-            node_id, func=avg_func, dependencies=[source], priority=priority
+        return self._attach_buffer(
+            self._graph.add_compute(
+                node_id, func=avg_func, dependencies=[source], priority=priority
+            ),
+            buffer,
         )
 
     def create_moving_sum(
@@ -170,8 +178,11 @@ class WindowNode:
             buffer.push(value)
             return sum(buffer.values)
 
-        return self._graph.add_compute(
-            node_id, func=sum_func, dependencies=[source], priority=priority
+        return self._attach_buffer(
+            self._graph.add_compute(
+                node_id, func=sum_func, dependencies=[source], priority=priority
+            ),
+            buffer,
         )
 
     def create_custom(
@@ -203,6 +214,9 @@ class WindowNode:
             buffer.push(value)
             return compute(buffer.values)
 
-        return self._graph.add_compute(
-            node_id, func=custom_func, dependencies=[source], priority=priority
+        return self._attach_buffer(
+            self._graph.add_compute(
+                node_id, func=custom_func, dependencies=[source], priority=priority
+            ),
+            buffer,
         )

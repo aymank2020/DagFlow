@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from dagflow.core.graph import ComputeGraph
 from dagflow.core.node import ComputeNode, InputNode, NodeState
@@ -30,6 +30,7 @@ class NodeSnapshot:
     generation: int = 0
     state: Optional[NodeState] = None
     last_valid_generation: Dict[str, int] = field(default_factory=dict)
+    window_buffer_values: Optional[List[Any]] = None
 
 
 @dataclass
@@ -81,12 +82,18 @@ class Checkpoint:
                     generation=node.generation,
                 )
             elif isinstance(node, ComputeNode):
+                window_buffer = getattr(node, "_dagflow_window_buffer", None)
+                window_values = None
+                if window_buffer is not None and hasattr(window_buffer, "values"):
+                    window_values = deepcopy(window_buffer.values)
+
                 snap = NodeSnapshot(
                     node_id=node_id,
                     is_input=False,
                     value=deepcopy(node.cached_value),
                     state=node.state,
                     last_valid_generation=dict(node.last_valid_generation),
+                    window_buffer_values=window_values,
                 )
             else:
                 continue
@@ -115,6 +122,12 @@ class Checkpoint:
                 node.cached_value = deepcopy(snap.value)
                 node.state = snap.state  # type: ignore[assignment]
                 node.last_valid_generation = dict(snap.last_valid_generation)
+                if snap.window_buffer_values is not None:
+                    window_buffer = getattr(node, "_dagflow_window_buffer", None)
+                    if window_buffer is not None:
+                        window_buffer.clear()
+                        for value in deepcopy(snap.window_buffer_values):
+                            window_buffer.push(value)
 
         # Restore cache
         if self._cache_snapshot is not None:
