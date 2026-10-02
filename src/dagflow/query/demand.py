@@ -52,16 +52,12 @@ class DemandEngine:
         if isinstance(node, InputNode):
             return node.value
 
-        # If clean and cached, return immediately
-        if node.state == NodeState.CLEAN and self._cache.get(node_id) is not None:
-            return self._cache.get(node_id)
-
-        # Find all dirty ancestors that need recomputation
-        dirty_ancestors = self._find_dirty_ancestors(node_id)
-        dirty_ancestors.add(node_id)
+        # Check ancestors before accepting a clean cached result. InputNode.set
+        # advances generations without eagerly marking descendants dirty.
+        required = self._find_required_ancestors(node_id)
 
         # Schedule them
-        execution_order = self._scheduler.schedule(dirty_ancestors)
+        execution_order = self._scheduler.schedule(required)
 
         # Execute in order
         for exec_id in execution_order:
@@ -83,12 +79,7 @@ class DemandEngine:
             if isinstance(node, InputNode):
                 results[nid] = node.value
                 continue
-            if node.state == NodeState.CLEAN and self._cache.get(nid) is not None:
-                results[nid] = self._cache.get(nid)
-                continue
-            ancestors = self._find_dirty_ancestors(nid)
-            ancestors.add(nid)
-            all_dirty.update(ancestors)
+            all_dirty.update(self._find_required_ancestors(nid))
 
         if all_dirty:
             execution_order = self._scheduler.schedule(all_dirty)
@@ -106,9 +97,9 @@ class DemandEngine:
 
         return results
 
-    def _find_dirty_ancestors(self, node_id: str) -> Set[str]:
-        """Walk upstream to find all dirty compute nodes that feed into node_id."""
-        dirty: Set[str] = set()
+    def _find_required_ancestors(self, node_id: str) -> Set[str]:
+        """Find compute ancestors whose generations must be checked in order."""
+        required: Set[str] = set()
         visited: Set[str] = set()
         queue: deque = deque([node_id])
 
@@ -122,31 +113,20 @@ class DemandEngine:
             if isinstance(node, InputNode):
                 continue
 
-            if node.state == NodeState.DIRTY:
-                dirty.add(current)
-                # Must also check this node's dependencies
-                for dep_id in node.dependencies:
-                    if dep_id not in visited:
-                        queue.append(dep_id)
-            elif node.state == NodeState.CLEAN:
-                # Even clean nodes might have dirty ancestors
-                # Check if cache is still valid
-                dep_gens = self._get_current_dep_generations(node)
-                if not self._cache.is_valid(current, dep_gens):
-                    dirty.add(current)
-                    node.mark_dirty()
-                    for dep_id in node.dependencies:
-                        if dep_id not in visited:
-                            queue.append(dep_id)
+            required.add(current)
+            for dep_id in node.dependencies:
+                if dep_id not in visited:
+                    queue.append(dep_id)
 
-        return dirty
+        return required
 
     def _execute_node(self, node_id: str) -> None:
         """Execute a single compute node and update cache."""
         node = self._graph.get_node(node_id)
         if not isinstance(node, ComputeNode):
             return
-        if node.state == NodeState.CLEAN:
+        current_generations = self._get_current_dep_generations(node)
+        if node.state == NodeState.CLEAN and self._cache.is_valid(node_id, current_generations):
             return
 
         # Gather dependency values
