@@ -6,12 +6,19 @@ build-backend = "setuptools.build_meta"
 name = "dagflow"
 version = "0.4.0"
 description = "Incremental computation engine"
+readme = "README.md"
 requires-python = ">=3.10"
 authors = [{name = "AfterQuery", email = "dev@afterquery.com"}]
 dependencies = []
 
+[project.scripts]
+dagflow = "dagflow.cli.__main__:main"
+
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+dagflow = ["py.typed"]
 
 [project.optional-dependencies]
 dev = [

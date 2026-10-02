@@ -41,15 +41,15 @@ class MemoCache:
             old_value, old_gen, _ = old_entry
             if value == old_value:
                 # Same value — keep generation, update dep snapshot
-                self._entries[node_id] = (value, old_gen, dep_generations)
+                self._entries[node_id] = (value, old_gen, dict(dep_generations))
                 return old_gen
             else:
                 new_gen = old_gen + 1
-                self._entries[node_id] = (value, new_gen, dep_generations)
+                self._entries[node_id] = (value, new_gen, dict(dep_generations))
                 return new_gen
         else:
             # First computation
-            self._entries[node_id] = (value, 1, dep_generations)
+            self._entries[node_id] = (value, 1, dict(dep_generations))
             return 1
 
     def get(self, node_id: str) -> Optional[Any]:
@@ -65,7 +65,7 @@ class MemoCache:
     def get_dep_snapshot(self, node_id: str) -> Dict[str, int]:
         """Get the dependency generation snapshot from last computation."""
         entry = self._entries.get(node_id)
-        return entry[2] if entry else {}
+        return dict(entry[2]) if entry else {}
 
     def is_valid(self, node_id: str, current_dep_generations: Dict[str, int]) -> bool:
         """Check if cached value is still valid given current dependency generations.
@@ -81,11 +81,7 @@ class MemoCache:
         if entry is None:
             return False
         _, _, stored_deps = entry
-        for dep_id, stored_gen in stored_deps.items():
-            current_gen = current_dep_generations.get(dep_id, 0)
-            if current_gen > stored_gen:
-                return False
-        return True
+        return stored_deps == current_dep_generations
 
     def invalidate(self, node_id: str) -> None:
         """Remove a node's cache entry entirely."""

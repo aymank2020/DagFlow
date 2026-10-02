@@ -21,6 +21,7 @@ from dagflow.cli.commands import (
     ValidateCommand,
 )
 from dagflow.cli.formatters import FormatKind
+from dagflow import __version__
 
 
 def create_parser() -> argparse.ArgumentParser:
@@ -37,7 +38,7 @@ def create_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--version",
         action="version",
-        version="dagflow 0.3.0",
+        version=f"dagflow {__version__}",
     )
     parser.add_argument(
         "--format",
